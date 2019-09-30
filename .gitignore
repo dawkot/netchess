@@ -1,3 +1,5 @@
 nimcache/
 src/*.exe
 src/*.js
+*.exe
+*.js

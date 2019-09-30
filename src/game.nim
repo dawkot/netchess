@@ -29,7 +29,6 @@ type
 
 var
   pieces: Table[Vec, Piece]
-  piecesRemoved*: seq[Piece]
   currentTeam*: Team
   winner*: Option[Team]
 
@@ -90,7 +89,6 @@ proc updateDests =
 proc resetGame* =
   winner = none Team
   currentTeam = default Team
-  piecesRemoved.setLen 0
   pieces.clear
   for x in 1..8:
     for y in [1, 2, 7, 8]:
@@ -111,9 +109,8 @@ proc canMovePiece*(src, dest: Vec): bool =
 
 proc movePiece*(src, dest: Vec) =
   assert canMovePiece(src, dest)
-  if (let p = pieceAt dest; p != nil):
-    piecesRemoved.add p
-    if p.kind == King: winner = some currentTeam
+  if (let p = pieceAt dest; p != nil and p.kind == King):
+    winner = some currentTeam
   pieces[dest] = pieces[src]
   pieces.del src
   currentTeam = not currentTeam

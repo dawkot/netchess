@@ -1,19 +1,17 @@
-import dom, json, jswebsockets, mutual, logging, options, strformat
+import dom, json, jswebsockets, mutual, options, strformat
 import karax / [karax, karaxdsl, vdom, vstyles]
 import game except movePiece
 
-type
-  Connection = enum CNone, CConnected, CConnecting, CFailed
-  PrevGameResult = enum
-    RNone, RWon, RLost, RServerFull
-    ROpponentDisconnected, RLostConnection
+type PrevGameResult = enum
+  RNone, RWon, RLost, RServerFull
+  ROpponentDisconnected, RLostConnection
 
 const InvalidPos = v(int.low, int.high)
 
 var
   conn: WebSocket
   prevGameResult = RNone
-  connection = CNone
+  prevConnAttemptFailed = false
 
 ## match state
 
@@ -24,22 +22,20 @@ var
 
 proc movePiece(src, dest: Vec) =
   game.movePiece src, dest
-  if connection == CConnected and winner.isSome:
+  if conn != nil and winner.isSome:
     prevGameResult = if winner.get == yourTeam: RWon else: RLost
+
+proc isCurrentTeam: bool =
+  conn == nil or currentTeam == yourTeam
 
 proc canSelect(v: Vec): bool =
   let p = pieceAt v
-  p != nil and p.team == currentTeam and p.dests.len > 0 and
-  connection != CConnected or currentTeam == yourTeam
-
-proc isCurrentTeam: bool =
-  connection != CConnected or currentTeam == yourTeam
+  p != nil and p.team == currentTeam and
+  p.dests.len > 0 and isCurrentTeam()
 
 proc onClickCell(v: Vec) =
   if canMovePiece(selected, v) and isCurrentTeam():
-    if connection == CConnected:
-      echo "SENDING!!!!!!!"
-      conn.send($ %*ClientMsg(src: selected, dest: v))
+    if conn != nil: conn.send($ %*ClientMsg(src: selected, dest: v))
     movePiece selected, v
     selected = InvalidPos
   else:
@@ -53,21 +49,19 @@ proc onClickCell(v: Vec) =
 
 proc initConnection =
   prevGameResult = RNone
-  connection = CConnecting
   conn = newWebSocket &"ws://{ServerAddr}:{ServerPort}/ws"
-  conn.onError = proc(ev: Event) =
-    connection = CFailed
-    redraw()
   conn.onOpen = proc(ev: Event) =
-    connection = CConnected
+    prevConnAttemptFailed = false
+    redraw()
+  conn.onError = proc(ev: Event) =
+    prevConnAttemptFailed = true
     redraw()
   conn.onClose = proc(ev: CloseEvent) =
-    if connection != CFailed: connection = CNone
     if prevGameResult == RNone: prevGameResult = RLostConnection
     gameStarted = false
+    conn = nil
     redraw()
   conn.onMessage = proc(ev: MessageEvent) =
-    debugEcho "received packet: ", ev.data
     let m = ($ev.data).parseJson.to ServerMsg
     case m.kind
     of OpponentMoved: movePiece m.src, m.dest
@@ -85,7 +79,6 @@ proc initLocal =
   gameStarted = true
   if conn != nil: conn.close
   conn = nil
-  connection = CNone
   resetGame()
 
 ## rendering
@@ -127,7 +120,7 @@ proc renderGame: VNode =
   buildHtml tdiv(id="game", class="container has-text-centered"):
     ## whose turn
     h1(class="title", style={StyleAttr.color: currentTeam.color}):
-      if connection != CConnected or currentTeam == yourTeam:
+      if conn == nil or currentTeam == yourTeam:
         text "Your turn"
       else:
         text "Opponent's turn"
@@ -154,13 +147,12 @@ proc renderMenu: VNode =
     of RNone:
       discard
     tdiv(class="buttons are-large"):
-      case connection
-      of CFailed:
+      if conn == nil and prevConnAttemptFailed:
         button(class="button is-danger"): text "Connect"
-      of CConnecting, CConnected:
-        button(class="button is-primary is-loading"): text "Connect"
-      else:
+      elif conn == nil:
         button(class="button is-primary", onClick=initConnection): text "Connect"
+      else:
+        button(class="button is-primary is-loading"): text "Connect"
       button(class="button is-primary", onClick=initLocal): text "Local"
 
 proc renderMain: VNode =
@@ -180,7 +172,6 @@ proc elem(tag: string, args: varargs[string]): Element =
 
 ## init
 
-addHandler newConsoleLogger()
 document.head.appendChild elem("link", "rel", "stylesheet", "href", "https://cdnjs.cloudflare.com/ajax/libs/bulma/0.7.5/css/bulma.css")
 document.head.appendChild elem("link", "rel", "stylesheet", "href", "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.11.2/css/all.css")
 resetGame()
